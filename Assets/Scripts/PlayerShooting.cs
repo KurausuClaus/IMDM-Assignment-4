@@ -9,7 +9,8 @@ using UnityEngine.InputSystem;
 /// 1. Create a ray originating from the camera.
 /// 2. Cast it forward up to the maximum shooting distance.
 /// 3. Check whether it intersects a Collider.
-/// 4. Report the result in Unity's Console.
+/// 4. Determine whether the object is a target.
+/// 5. Activate the target if applicable.
 ///
 /// No physical projectile is created.
 /// </summary>
@@ -113,12 +114,30 @@ public class PlayerShooting : MonoBehaviour
                 Color.green,
                 1f
             );
+
+
+            // =================================================
+            // TARGET DETECTION
+            // =================================================
+
+            // Find the Target component on the hit object
+            // or one of its parent objects.
+            Target target = hit.collider.GetComponentInParent<Target>();
+
+            // Only activate objects that have both:
+            // 1. A Target component.
+            // 2. The "Target" tag.
+            if (target != null && target.CompareTag("Target"))
+            {
+                target.Hit();
+            }
         }
         else
         {
             // Report a missed shot.
             Debug.Log("Shot missed!");
 
+            // Show the ray in the Scene view.
             Debug.DrawRay(
                 ray.origin,
                 ray.direction * shootingRange,

@@ -5729,6 +5729,7 @@ GameObject:
   - component: {fileID: 767123635}
   - component: {fileID: 767123634}
   - component: {fileID: 767123633}
+  - component: {fileID: 767123637}
   m_Layer: 0
   m_Name: Door
   m_TagString: Untagged
@@ -5829,6 +5830,23 @@ Transform:
   m_Children: []
   m_Father: {fileID: 636893158}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &767123637
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 767123632}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 51f160b9bdc95ac459f7cbb198cffb9c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::ReactToTarget
+  activationTarget: {fileID: 1720001172}
+  objectCollider: {fileID: 767123633}
+  objectRenderer: {fileID: 767123634}
+  activeColor: {r: 0, g: 1, b: 0, a: 1}
+  inactiveColor: {r: 1, g: 0, b: 0, a: 1}
 --- !u!1 &789584042
 GameObject:
   m_ObjectHideFlags: 0
@@ -15104,9 +15122,10 @@ GameObject:
   - component: {fileID: 1720001170}
   - component: {fileID: 1720001169}
   - component: {fileID: 1720001168}
+  - component: {fileID: 1720001172}
   m_Layer: 0
   m_Name: Target
-  m_TagString: Untagged
+  m_TagString: Target
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
@@ -15206,6 +15225,19 @@ Transform:
   m_Children: []
   m_Father: {fileID: 636893158}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 56.55}
+--- !u!114 &1720001172
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1720001167}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 06335f2b6ebe7b0408649a384591978e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Target
+  reusable: 1
 --- !u!1 &1778991965
 GameObject:
   m_ObjectHideFlags: 0
