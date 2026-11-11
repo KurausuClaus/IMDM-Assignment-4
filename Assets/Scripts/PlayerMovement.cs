@@ -1,621 +1,425 @@
-
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
 
 /// <summary>
-/// Controls first-person player movement using Unity's CharacterController.
+/// First-person movement with responsive ground movement, air control,
+/// variable jumping, moving-platform riding and momentum inheritance,
+/// collectible interaction, and DeathZone handling.
 ///
-/// Features:
-/// - Independent forward, backward, and sideways movement speeds
-/// - Configurable ground acceleration and deceleration
-/// - Instant ground stopping when movement keys are released
-/// - Configurable air acceleration and deceleration
-/// - Jumping with adjustable height
-/// - Variable jump height based on how long Jump is held
-/// - Adjustable gravity and falling speed
-/// - Coyote time and jump buffering
-/// - Collectible interaction via camera raycasting
-/// - DeathZone detection and automatic level restarting
-///
-/// Movement is relative to the player's orientation.
-/// Camera rotation should be handled by a separate script.
-///
-/// Requires:
-/// - A CharacterController component
-/// - Move and Jump actions from Unity's Input System
-/// - An optional Interact action for collecting objects
+/// Moving platforms do NOT need a special tag or script. Their collider must
+/// stay enabled while solid, and their Transform must move (directly or via
+/// a parent / Rigidbody). This component records the surface touched beneath
+/// the character and follows its translation and rotation.
 /// </summary>
 [RequireComponent(typeof(CharacterController))]
+[DefaultExecutionOrder(100)]
 public class PlayerMovement : MonoBehaviour
 {
     // =========================================================
-    // GROUND MOVEMENT SETTINGS
+    // GROUND MOVEMENT
     // =========================================================
 
     [Header("Ground Movement")]
-
-    [SerializeField, Min(0f)]
-    [Tooltip("Maximum forward movement speed.")]
-    private float forwardSpeed = 6f;
-
-    [SerializeField, Min(0f)]
-    [Tooltip("Maximum backward movement speed.")]
-    private float backwardSpeed = 5f;
-
-    [SerializeField, Min(0f)]
-    [Tooltip("Maximum sideways movement speed.")]
-    private float strafeSpeed = 6f;
-
-    [SerializeField, Min(0f)]
-    [Tooltip("How quickly the player accelerates on the ground.")]
-    private float acceleration = 30f;
-
-    [SerializeField, Min(0f)]
-    [Tooltip("How quickly the player decelerates on the ground while changing direction.")]
-    private float deceleration = 40f;
-
+    [SerializeField, Min(0f)] private float forwardSpeed = 6f;
+    [SerializeField, Min(0f)] private float backwardSpeed = 5f;
+    [SerializeField, Min(0f)] private float strafeSpeed = 6f;
+    [SerializeField, Min(0f)] private float acceleration = 30f;
+    [SerializeField, Min(0f)] private float deceleration = 40f;
 
     // =========================================================
-    // AIR MOVEMENT SETTINGS
+    // AIR MOVEMENT
     // =========================================================
 
     [Header("Air Movement")]
-
+    [SerializeField, Min(0f)] private float airAcceleration = 10f;
     [SerializeField, Min(0f)]
-    [Tooltip("How quickly horizontal velocity can change in the air.")]
-    private float airAcceleration = 10f;
-
-    [SerializeField, Min(0f)]
-    [Tooltip("How quickly horizontal movement slows in the air when no input is held. Set to 0 to preserve momentum.")]
-    private float airDeceleration = 2f;
-
+    [Tooltip("Set to 0 to preserve player-controlled air momentum when releasing movement keys.")]
+    private float airDeceleration = 0f;
 
     // =========================================================
-    // JUMP SETTINGS
+    // JUMPING
     // =========================================================
 
     [Header("Jumping")]
-
-    [SerializeField, Min(0f)]
-    [Tooltip("Approximate maximum jump height when Jump is held.")]
-    private float jumpHeight = 2f;
-
-    [SerializeField, Min(0f)]
-    [Tooltip("Extra time after leaving a ledge during which jumping is allowed.")]
-    private float coyoteTime = 0.1f;
-
-    [SerializeField, Min(0f)]
-    [Tooltip("How long a jump input is remembered before landing.")]
-    private float jumpBufferTime = 0.1f;
-
-    [SerializeField, Range(0f, 1f)]
-    [Tooltip("Fraction of upward velocity retained when Jump is released.")]
-    private float jumpCutMultiplier = 0.4f;
-
+    [SerializeField, Min(0f)] private float jumpHeight = 2f;
+    [SerializeField, Min(0f)] private float coyoteTime = 0.1f;
+    [SerializeField, Min(0f)] private float jumpBufferTime = 0.1f;
+    [SerializeField, Range(0f, 1f)] private float jumpCutMultiplier = 0.4f;
 
     // =========================================================
-    // GRAVITY SETTINGS
+    // GRAVITY
     // =========================================================
 
     [Header("Gravity")]
-
-    [SerializeField, Min(0.01f)]
-    [Tooltip("Base gravitational acceleration. Enter a positive number.")]
-    private float gravity = 20f;
-
-    [SerializeField, Min(1f)]
-    [Tooltip("Multiplier applied to gravity while falling.")]
-    private float fallMultiplier = 1.5f;
-
-    [SerializeField, Min(1f)]
-    [Tooltip("Multiplier applied to gravity when Jump is released during ascent.")]
-    private float jumpReleaseMultiplier = 2f;
-
-    [SerializeField, Min(0.01f)]
-    [Tooltip("Maximum downward falling speed.")]
-    private float maxFallSpeed = 50f;
-
-    [SerializeField, Min(0f)]
-    [Tooltip("Small downward velocity used to maintain ground contact.")]
-    private float groundStickSpeed = 2f;
-
+    [SerializeField, Min(0.01f)] private float gravity = 20f;
+    [SerializeField, Min(1f)] private float fallMultiplier = 1.5f;
+    [SerializeField, Min(1f)] private float jumpReleaseMultiplier = 2f;
+    [SerializeField, Min(0.01f)] private float maxFallSpeed = 50f;
+    [SerializeField, Min(0f)] private float groundStickSpeed = 2f;
 
     // =========================================================
-    // INPUT SETTINGS
+    // MOVING PLATFORMS
+    // =========================================================
+
+    [Header("Moving Platforms")]
+    [SerializeField]
+    [Tooltip("Carry the player along when standing on a translating or rotating platform.")]
+    private bool rideMovingPlatforms = true;
+
+    [SerializeField]
+    [Tooltip("Inherit platform speed when jumping or running off an edge.")]
+    private bool inheritPlatformMomentum = true;
+
+    [SerializeField, Min(0f)]
+    [Tooltip("1 = full platform velocity; 0 = no inherited velocity; >1 = amplified launch.")]
+    private float platformMomentumMultiplier = 1f;
+
+    [SerializeField, Range(0f, 89f)]
+    [Tooltip("A collision must have a sufficiently upward-facing normal to count as floor.")]
+    private float maxGroundAngle = 60f;
+
+    // =========================================================
+    // INPUT / INTERACTION
     // =========================================================
 
     [Header("Input Actions")]
-
-    [SerializeField]
-    private InputActionReference moveAction;
-
-    [SerializeField]
-    private InputActionReference jumpAction;
-
-    [SerializeField]
-    [Tooltip("Input action used for interacting with objects.")]
-    private InputActionReference interactAction;
-
-
-    // =========================================================
-    // INTERACTION SETTINGS
-    // =========================================================
+    [SerializeField] private InputActionReference moveAction;
+    [SerializeField] private InputActionReference jumpAction;
+    [SerializeField] private InputActionReference interactAction;
 
     [Header("Interaction")]
-
-    [SerializeField]
-    [Tooltip("Camera used to determine what the player is looking at.")]
-    private Camera playerCamera;
-
-    [SerializeField, Min(0f)]
-    [Tooltip("Maximum distance at which collectibles can be interacted with.")]
-    private float interactionRange = 3f;
-
+    [SerializeField] private Camera playerCamera;
+    [SerializeField, Min(0f)] private float interactionRange = 3f;
 
     // =========================================================
     // INTERNAL STATE
     // =========================================================
 
-    // Reference to the player's CharacterController.
     private CharacterController controller;
-
-    // Current horizontal velocity, in world coordinates.
-    // Stored between frames so acceleration is gradual.
     private Vector3 horizontalVelocity;
-
-    // Current upward/downward velocity.
-    // Positive = rising; negative = falling.
     private float verticalVelocity;
-
-    // Remaining time during which jumping is allowed
-    // after the player leaves the ground.
     private float coyoteTimer;
-
-    // Remaining time for a buffered jump input.
     private float jumpBufferTimer = -1f;
+    private bool isDead;
+    private bool jumpedThisFrame;
 
-    // Prevents death from being processed multiple times.
-    private bool isDead = false;
+    // The player's own horizontal speed is separate from velocity inherited
+    // from a launch platform. This prevents air steering from immediately
+    // cancelling a high-speed platform launch.
+    private Vector3 inheritedHorizontalVelocity;
 
+    // Platform attachment uses a point in the platform collider's LOCAL space.
+    // This tracks both linear movement and rotation without parenting the player.
+    private Collider standingCollider;
+    private Transform standingTransform;
+    private Vector3 platformLocalAnchor;
+    private Vector3 lastPlatformAnchorWorld;
+    private Vector3 platformVelocity;
+    private Vector3 platformMotion;
+
+    // OnControllerColliderHit fires during CharacterController.Move().
+    private Collider groundHitThisFrame;
+    private float bestGroundNormalY;
 
     // =========================================================
     // UNITY LIFECYCLE
     // =========================================================
 
-    /// <summary>
-    /// Retrieves required components when the object initializes.
-    /// </summary>
     private void Awake()
     {
         controller = GetComponent<CharacterController>();
     }
 
-
-    /// <summary>
-    /// Enables input actions when this component becomes active.
-    /// </summary>
     private void OnEnable()
     {
-        if (moveAction != null)
-            moveAction.action.Enable();
-
-        if (jumpAction != null)
-            jumpAction.action.Enable();
-
-        if (interactAction != null)
-            interactAction.action.Enable();
+        if (moveAction != null) moveAction.action.Enable();
+        if (jumpAction != null) jumpAction.action.Enable();
+        if (interactAction != null) interactAction.action.Enable();
     }
 
-
-    /// <summary>
-    /// Disables input actions when this component becomes inactive.
-    /// </summary>
     private void OnDisable()
     {
-        if (moveAction != null)
-            moveAction.action.Disable();
-
-        if (jumpAction != null)
-            jumpAction.action.Disable();
-
-        if (interactAction != null)
-            interactAction.action.Disable();
+        if (moveAction != null) moveAction.action.Disable();
+        if (jumpAction != null) jumpAction.action.Disable();
+        if (interactAction != null) interactAction.action.Disable();
     }
 
-
-    /// <summary>
-    /// Updates player movement once per rendered frame.
-    ///
-    /// Order of operations:
-    /// 1. Read movement input.
-    /// 2. Calculate horizontal velocity.
-    /// 3. Update jump timing.
-    /// 4. Calculate vertical velocity.
-    /// 5. Apply the final movement.
-    /// 6. Check for collectible interaction.
-    /// </summary>
     private void Update()
     {
-        if (isDead)
+        if (isDead || moveAction == null || jumpAction == null)
             return;
 
-        if (moveAction == null || jumpAction == null)
+        float dt = Time.deltaTime;
+        if (dt <= 0f)
             return;
 
-        float deltaTime = Time.deltaTime;
+        // isGrounded reports the result of last frame's Move().
+        bool wasGrounded = controller.isGrounded;
+        jumpedThisFrame = false;
 
-        // isGrounded describes the previous Move() result.
-        bool isGrounded = controller.isGrounded;
+        // Measure where the attached platform carried the player's local
+        // standing point since the previous frame.
+        UpdatePlatformMovement(wasGrounded, dt);
 
-        Vector2 movementInput =
-            moveAction.action.ReadValue<Vector2>();
+        if (wasGrounded)
+            inheritedHorizontalVelocity = Vector3.zero;
 
-        UpdateHorizontalMovement(
-            movementInput,
-            isGrounded,
-            deltaTime
-        );
+        Vector2 input = moveAction.action.ReadValue<Vector2>();
+        UpdateHorizontalMovement(input, wasGrounded, dt);
+        UpdateJumpTimers(wasGrounded, dt);
+        UpdateVerticalMovement(wasGrounded, dt);
 
-        UpdateJumpTimers(isGrounded, deltaTime);
-
-        UpdateVerticalMovement(isGrounded, deltaTime);
-
-        ApplyMovement(deltaTime);
+        // A jump inherits platform velocity, rather than both inheriting
+        // velocity AND taking another full platform displacement this frame.
+        Vector3 carry = jumpedThisFrame ? Vector3.zero : platformMotion;
+        ApplyMovement(dt, carry);
 
         if (!isDead)
             HandleInteraction();
     }
 
-
     // =========================================================
     // HORIZONTAL MOVEMENT
     // =========================================================
 
-    /// <summary>
-    /// Updates horizontal velocity using player input.
-    ///
-    /// Movement is relative to the player's orientation.
-    /// Different speeds can be assigned to forward, backward,
-    /// and sideways movement.
-    ///
-    /// Grounded and airborne movement use different
-    /// acceleration and deceleration values.
-    ///
-    /// When grounded, releasing all movement keys immediately
-    /// sets horizontal velocity to zero.
-    ///
-    /// When airborne, releasing movement keys preserves
-    /// momentum according to the air deceleration setting.
-    /// </summary>
-    private void UpdateHorizontalMovement(
-        Vector2 input,
-        bool isGrounded,
-        float deltaTime)
+    private void UpdateHorizontalMovement(Vector2 input, bool isGrounded, float dt)
     {
-        // Prevent diagonal input from exceeding magnitude 1.
         input = Vector2.ClampMagnitude(input, 1f);
+        bool hasInput = input.sqrMagnitude > 0f;
 
-        // Determine whether forward or backward speed applies.
-        float selectedSpeed = forwardSpeed;
-
-        if (input.y < 0f)
-        {
-            selectedSpeed = backwardSpeed;
-        }
-
-        // Calculate movement relative to player orientation.
-        Vector3 forwardMovement =
-            transform.forward * input.y * selectedSpeed;
-
-        Vector3 sidewaysMovement =
-            transform.right * input.x * strafeSpeed;
-
-        // Combined desired horizontal velocity.
+        float speed = input.y < 0f ? backwardSpeed : forwardSpeed;
         Vector3 targetVelocity =
-            forwardMovement + sidewaysMovement;
-
-        // Horizontal movement must not modify vertical velocity.
+            transform.forward * input.y * speed +
+            transform.right * input.x * strafeSpeed;
         targetVelocity.y = 0f;
 
-        // Determine whether movement input is being supplied.
-        bool hasMovementInput = input.sqrMagnitude > 0f;
+        float movementRate = isGrounded
+            ? (hasInput ? acceleration : deceleration)
+            : (hasInput ? airAcceleration : airDeceleration);
 
-        // Choose an acceleration/deceleration rate.
-        float movementRate;
-
-        if (isGrounded)
-        {
-            movementRate = hasMovementInput
-                ? acceleration
-                : deceleration;
-        }
-        else
-        {
-            movementRate = hasMovementInput
-                ? airAcceleration
-                : airDeceleration;
-        }
-
-        // =====================================================
-        // INSTANT GROUND STOPPING
-        // =====================================================
-
-        // Stop immediately when no movement input is held
-        // and the CharacterController is grounded.
-        //
-        // This removes ground sliding and makes landing
-        // on small platforms easier to control.
-        //
-        // Airborne movement remains unaffected.
-        if (isGrounded && !hasMovementInput)
-        {
+        // Immediate stop on the ground, including when the platform moves.
+        // The platform's motion is carried separately from user input.
+        if (isGrounded && !hasInput)
             horizontalVelocity = Vector3.zero;
-        }
         else
-        {
-            // Gradually approach the desired velocity
-            // using the appropriate acceleration rate.
             horizontalVelocity = Vector3.MoveTowards(
-                horizontalVelocity,
-                targetVelocity,
-                movementRate * deltaTime
-            );
-        }
+                horizontalVelocity, targetVelocity, movementRate * dt);
     }
 
-
     // =========================================================
-    // JUMP TIMING
+    // JUMPING / GRAVITY
     // =========================================================
 
-    /// <summary>
-    /// Updates the timers used for coyote time and jump buffering.
-    ///
-    /// Coyote time allows jumping shortly after leaving a ledge.
-    ///
-    /// Jump buffering allows an early jump press to be remembered
-    /// briefly, so the jump can execute when the player lands.
-    /// </summary>
-    private void UpdateJumpTimers(
-        bool isGrounded,
-        float deltaTime)
+    private void UpdateJumpTimers(bool isGrounded, float dt)
     {
-        // Refresh coyote time whenever grounded.
-        if (isGrounded)
-        {
-            coyoteTimer = coyoteTime;
-        }
-        else
-        {
-            coyoteTimer -= deltaTime;
-        }
+        if (isGrounded) coyoteTimer = coyoteTime;
+        else coyoteTimer -= dt;
 
-        // Remember a fresh jump press.
         if (jumpAction.action.WasPressedThisFrame())
-        {
             jumpBufferTimer = jumpBufferTime;
-        }
         else
-        {
-            jumpBufferTimer -= deltaTime;
-        }
+            jumpBufferTimer -= dt;
     }
 
-
-    // =========================================================
-    // VERTICAL MOVEMENT
-    // =========================================================
-
-    /// <summary>
-    /// Updates the player's vertical velocity.
-    ///
-    /// Responsible for:
-    /// - Maintaining contact with the ground
-    /// - Beginning jumps
-    /// - Applying gravity
-    /// - Increasing falling speed
-    /// - Shortening jumps when the button is released
-    /// - Limiting maximum falling speed
-    /// </summary>
-    private void UpdateVerticalMovement(
-        bool isGrounded,
-        float deltaTime)
+    private void UpdateVerticalMovement(bool isGrounded, float dt)
     {
-        // Maintain slight downward velocity when grounded.
-        // This prevents accumulated downward speed from persisting.
         if (isGrounded && verticalVelocity < 0f)
-        {
             verticalVelocity = -groundStickSpeed;
-        }
 
-        // Attempt to execute a jump.
         TryJump();
 
-        // Cut the jump short when the player releases Space.
-        if (jumpAction.action.WasReleasedThisFrame()
-            && verticalVelocity > 0f)
-        {
+        if (jumpAction.action.WasReleasedThisFrame() && verticalVelocity > 0f)
             verticalVelocity *= jumpCutMultiplier;
-        }
 
-        // Determine the gravity for the current situation.
         float currentGravity = gravity;
-
         if (!isGrounded && verticalVelocity < 0f)
-        {
-            // Apply additional gravity while falling.
             currentGravity *= fallMultiplier;
-        }
-        else if (
-            verticalVelocity > 0f &&
-            !jumpAction.action.IsPressed())
-        {
-            // Releasing Jump early produces a shorter jump.
+        else if (verticalVelocity > 0f && !jumpAction.action.IsPressed())
             currentGravity *= jumpReleaseMultiplier;
-        }
 
-        // Gravity continuously reduces upward velocity
-        // and increases downward velocity.
-        verticalVelocity -= currentGravity * deltaTime;
-
-        // Do not allow falling speed to exceed the limit.
-        verticalVelocity = Mathf.Max(
-            verticalVelocity,
-            -maxFallSpeed
-        );
+        verticalVelocity -= currentGravity * dt;
+        verticalVelocity = Mathf.Max(verticalVelocity, -maxFallSpeed);
     }
 
-
-    /// <summary>
-    /// Starts a jump if both conditions are satisfied:
-    ///
-    /// 1. A valid jump input is available.
-    /// 2. The player is grounded or within coyote time.
-    ///
-    /// The initial upward velocity is calculated from
-    /// the desired jump height and gravitational acceleration.
-    /// </summary>
     private void TryJump()
     {
-        bool hasJumpInput = jumpBufferTimer >= 0f;
-        bool canJump = coyoteTimer >= 0f;
-
-        if (!hasJumpInput || !canJump)
+        if (jumpBufferTimer < 0f || coyoteTimer < 0f)
             return;
 
-        // Initial velocity needed to reach the desired height.
-        verticalVelocity = Mathf.Sqrt(
-            2f * gravity * jumpHeight
-        );
+        jumpedThisFrame = true;
+        verticalVelocity = Mathf.Sqrt(2f * gravity * jumpHeight);
 
-        // Consume the jump input and grounded grace period.
-        // This prevents the same input from triggering again.
+        if (inheritPlatformMomentum && rideMovingPlatforms &&
+            standingCollider != null)
+        {
+            // Add the platform's velocity without affecting air steering.
+            // If this is a coyote-time jump after stepping off, keep the
+            // inherited horizontal speed that was already assigned.
+            inheritedHorizontalVelocity = new Vector3(
+                platformVelocity.x, 0f, platformVelocity.z)
+                * platformMomentumMultiplier;
+            verticalVelocity += platformVelocity.y * platformMomentumMultiplier;
+        }
+
         jumpBufferTimer = -1f;
         coyoteTimer = -1f;
     }
 
-
     // =========================================================
-    // COLLECTIBLE INTERACTION
+    // MOVING PLATFORM TRACKING
     // =========================================================
 
-    /// <summary>
-    /// Checks whether the player has pressed Interact.
-    ///
-    /// If so, casts a ray forward from the player's camera.
-    /// If the ray hits an object tagged "Collectible", the
-    /// object is collected.
-    ///
-    /// Child colliders are supported by checking their parents.
-    /// Trigger colliders are also supported.
-    /// </summary>
-    private void HandleInteraction()
+    private void UpdatePlatformMovement(bool wasGrounded, float dt)
     {
-        // Interaction is optional. Missing assignments should
-        // not interfere with movement or jumping.
-        if (interactAction == null || playerCamera == null)
-            return;
+        platformMotion = Vector3.zero;
+        platformVelocity = Vector3.zero;
 
-        // Only interact when the button is first pressed.
-        if (!interactAction.action.WasPressedThisFrame())
-            return;
-
-        // Create a ray originating from the camera
-        // and pointing in the direction the player looks.
-        Ray ray = new Ray(
-            playerCamera.transform.position,
-            playerCamera.transform.forward
-        );
-
-        // Check for an object within interaction range.
-        if (!Physics.Raycast(
-                ray,
-                out RaycastHit hit,
-                interactionRange,
-                Physics.DefaultRaycastLayers,
-                QueryTriggerInteraction.Collide))
+        if (!rideMovingPlatforms || !wasGrounded ||
+            standingCollider == null || !standingCollider.enabled ||
+            !standingCollider.gameObject.activeInHierarchy ||
+            standingTransform == null)
         {
+            ClearPlatform();
             return;
         }
 
-        // Search the hit object and its parents.
-        // This supports collectibles with child colliders.
-        Transform current = hit.collider.transform;
+        Vector3 currentAnchorWorld =
+            standingTransform.TransformPoint(platformLocalAnchor);
 
+        platformMotion = currentAnchorWorld - lastPlatformAnchorWorld;
+        platformVelocity = platformMotion / dt;
+    }
+
+    private void AttachToPlatform(Collider ground)
+    {
+        standingCollider = ground;
+        standingTransform = ground.transform;
+
+        // Refresh every frame, so the player can walk around on the platform.
+        platformLocalAnchor =
+            standingTransform.InverseTransformPoint(transform.position);
+        lastPlatformAnchorWorld =
+            standingTransform.TransformPoint(platformLocalAnchor);
+    }
+
+    private void ClearPlatform()
+    {
+        standingCollider = null;
+        standingTransform = null;
+        platformMotion = Vector3.zero;
+        platformVelocity = Vector3.zero;
+    }
+
+    // =========================================================
+    // APPLY MOVEMENT
+    // =========================================================
+
+    private void ApplyMovement(float dt, Vector3 carry)
+    {
+        // Gather ground contacts from THIS move only.
+        groundHitThisFrame = null;
+        bestGroundNormalY = Mathf.Cos(maxGroundAngle * Mathf.Deg2Rad);
+
+        Vector3 velocity = horizontalVelocity + inheritedHorizontalVelocity;
+        velocity.y = verticalVelocity;
+
+        // One controller.Move call handles both our input and platform carry.
+        CollisionFlags flags = controller.Move(velocity * dt + carry);
+
+        if ((flags & CollisionFlags.Above) != 0 && verticalVelocity > 0f)
+            verticalVelocity = 0f;
+
+        bool onFloor = (flags & CollisionFlags.Below) != 0;
+
+        // Landing removes any inherited air momentum, so releasing movement
+        // keys stops immediately and we don't slide off narrow platforms.
+        if (onFloor)
+            inheritedHorizontalVelocity = Vector3.zero;
+
+        // If we're standing on something, remember it for next frame.
+        if (!jumpedThisFrame && onFloor && groundHitThisFrame != null &&
+            rideMovingPlatforms)
+        {
+            AttachToPlatform(groundHitThisFrame);
+        }
+        else
+        {
+            // Walking off an edge transfers the platform's last velocity.
+            if (!jumpedThisFrame && !onFloor && inheritPlatformMomentum &&
+                rideMovingPlatforms && standingCollider != null)
+            {
+                inheritedHorizontalVelocity = new Vector3(
+                    platformVelocity.x, 0f, platformVelocity.z)
+                    * platformMomentumMultiplier;
+            }
+
+            ClearPlatform();
+        }
+    }
+
+    private void OnControllerColliderHit(ControllerColliderHit hit)
+    {
+        CheckForDeath(hit.collider);
+        if (isDead)
+            return;
+
+        // Only record supporting ground, not walls or ceilings.
+        float normalY = hit.normal.y;
+        if (normalY > bestGroundNormalY && hit.collider != null &&
+            !hit.collider.isTrigger)
+        {
+            bestGroundNormalY = normalY;
+            groundHitThisFrame = hit.collider;
+        }
+    }
+
+    // =========================================================
+    // COLLECTIBLES
+    // =========================================================
+
+    private void HandleInteraction()
+    {
+        if (interactAction == null || playerCamera == null ||
+            !interactAction.action.WasPressedThisFrame())
+            return;
+
+        Ray ray = new Ray(
+            playerCamera.transform.position,
+            playerCamera.transform.forward);
+
+        if (!Physics.Raycast(ray, out RaycastHit hit, interactionRange,
+            Physics.DefaultRaycastLayers, QueryTriggerInteraction.Collide))
+            return;
+
+        Transform current = hit.collider.transform;
         while (current != null)
         {
             if (current.CompareTag("Collectible"))
             {
-                CollectItem(current.gameObject);
+                Debug.Log($"Collected: {current.name}");
+                Destroy(current.gameObject);
                 return;
             }
-
             current = current.parent;
         }
     }
 
-
-    /// <summary>
-    /// Processes a collected object.
-    ///
-    /// Currently:
-    /// 1. Logs the collected object's name.
-    /// 2. Removes the object from the scene.
-    ///
-    /// Inventory functionality can be added here later.
-    /// </summary>
-    private void CollectItem(GameObject item)
-    {
-        Debug.Log($"Collected: {item.name}");
-
-        Destroy(item);
-    }
-
-
     // =========================================================
-    // PLAYER DEATH
+    // DEATH ZONES
     // =========================================================
 
-    /// <summary>
-    /// Detects collisions between the CharacterController
-    /// and non-trigger colliders.
-    ///
-    /// If the contacted object is a DeathZone, the player dies.
-    /// </summary>
-    private void OnControllerColliderHit(ControllerColliderHit hit)
-    {
-        CheckForDeath(hit.collider);
-    }
-
-
-    /// <summary>
-    /// Detects when the player enters a trigger collider.
-    ///
-    /// Allows DeathZones to be non-solid while still
-    /// killing the player on contact.
-    /// </summary>
     private void OnTriggerEnter(Collider other)
     {
         CheckForDeath(other);
     }
 
-
-    /// <summary>
-    /// Checks whether the contacted object or one of its
-    /// parents has the "DeathZone" tag.
-    ///
-    /// This supports hazards whose colliders are located
-    /// on child GameObjects.
-    /// </summary>
     private void CheckForDeath(Collider other)
     {
-        // Ignore additional collisions after death.
-        if (isDead)
+        if (isDead || other == null)
             return;
 
         Transform current = other.transform;
-
         while (current != null)
         {
             if (current.CompareTag("DeathZone"))
@@ -623,66 +427,17 @@ public class PlayerMovement : MonoBehaviour
                 Die();
                 return;
             }
-
             current = current.parent;
         }
     }
 
-
-    /// <summary>
-    /// Kills the player and restarts the current level.
-    ///
-    /// The isDead flag prevents multiple death events
-    /// from attempting to reload the scene simultaneously.
-    /// </summary>
     private void Die()
     {
         if (isDead)
             return;
 
         isDead = true;
-
         Debug.Log("Player died!");
-
-        // Reload the currently active scene.
-        SceneManager.LoadScene(
-            SceneManager.GetActiveScene().name
-        );
-    }
-
-
-    // =========================================================
-    // APPLY MOVEMENT
-    // =========================================================
-
-    /// <summary>
-    /// Combines horizontal and vertical velocity and moves
-    /// the CharacterController.
-    ///
-    /// CharacterController.Move() takes displacement rather
-    /// than velocity, so we multiply by deltaTime.
-    ///
-    /// Also cancels upward velocity if the player hits a ceiling.
-    /// </summary>
-    private void ApplyMovement(float deltaTime)
-    {
-        // Combine independent movement components.
-        Vector3 finalVelocity = horizontalVelocity;
-        finalVelocity.y = verticalVelocity;
-
-        // Convert velocity into displacement for this frame.
-        Vector3 displacement = finalVelocity * deltaTime;
-
-        // Move while respecting CharacterController collisions.
-        CollisionFlags collisions = controller.Move(displacement);
-
-        // Stop upward movement when hitting a ceiling.
-        bool hitCeiling =
-            (collisions & CollisionFlags.Above) != 0;
-
-        if (hitCeiling && verticalVelocity > 0f)
-        {
-            verticalVelocity = 0f;
-        }
+        SceneManager.LoadScene(SceneManager.GetActiveScene().name);
     }
 }
