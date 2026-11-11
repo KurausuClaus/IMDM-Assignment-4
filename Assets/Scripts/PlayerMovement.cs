@@ -1,6 +1,7 @@
 
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.SceneManagement;
 
 /// <summary>
 /// Controls first-person player movement using Unity's CharacterController.
@@ -8,18 +9,22 @@ using UnityEngine.InputSystem;
 /// Features:
 /// - Independent forward, backward, and sideways movement speeds
 /// - Configurable ground acceleration and deceleration
+/// - Instant ground stopping when movement keys are released
 /// - Configurable air acceleration and deceleration
 /// - Jumping with adjustable height
 /// - Variable jump height based on how long Jump is held
 /// - Adjustable gravity and falling speed
 /// - Coyote time and jump buffering
+/// - Collectible interaction via camera raycasting
+/// - DeathZone detection and automatic level restarting
 ///
 /// Movement is relative to the player's orientation.
 /// Camera rotation should be handled by a separate script.
 ///
-/// This script requires:
+/// Requires:
 /// - A CharacterController component
 /// - Move and Jump actions from Unity's Input System
+/// - An optional Interact action for collecting objects
 /// </summary>
 [RequireComponent(typeof(CharacterController))]
 public class PlayerMovement : MonoBehaviour
@@ -47,7 +52,7 @@ public class PlayerMovement : MonoBehaviour
     private float acceleration = 30f;
 
     [SerializeField, Min(0f)]
-    [Tooltip("How quickly the player stops on the ground.")]
+    [Tooltip("How quickly the player decelerates on the ground while changing direction.")]
     private float deceleration = 40f;
 
 
@@ -62,7 +67,7 @@ public class PlayerMovement : MonoBehaviour
     private float airAcceleration = 10f;
 
     [SerializeField, Min(0f)]
-    [Tooltip("How quickly horizontal movement slows in the air when no input is held.")]
+    [Tooltip("How quickly horizontal movement slows in the air when no input is held. Set to 0 to preserve momentum.")]
     private float airDeceleration = 2f;
 
 
@@ -83,6 +88,10 @@ public class PlayerMovement : MonoBehaviour
     [SerializeField, Min(0f)]
     [Tooltip("How long a jump input is remembered before landing.")]
     private float jumpBufferTime = 0.1f;
+
+    [SerializeField, Range(0f, 1f)]
+    [Tooltip("Fraction of upward velocity retained when Jump is released.")]
+    private float jumpCutMultiplier = 0.4f;
 
 
     // =========================================================
@@ -124,6 +133,25 @@ public class PlayerMovement : MonoBehaviour
     [SerializeField]
     private InputActionReference jumpAction;
 
+    [SerializeField]
+    [Tooltip("Input action used for interacting with objects.")]
+    private InputActionReference interactAction;
+
+
+    // =========================================================
+    // INTERACTION SETTINGS
+    // =========================================================
+
+    [Header("Interaction")]
+
+    [SerializeField]
+    [Tooltip("Camera used to determine what the player is looking at.")]
+    private Camera playerCamera;
+
+    [SerializeField, Min(0f)]
+    [Tooltip("Maximum distance at which collectibles can be interacted with.")]
+    private float interactionRange = 3f;
+
 
     // =========================================================
     // INTERNAL STATE
@@ -133,19 +161,22 @@ public class PlayerMovement : MonoBehaviour
     private CharacterController controller;
 
     // Current horizontal velocity, in world coordinates.
-    // This is stored between frames so acceleration is gradual.
+    // Stored between frames so acceleration is gradual.
     private Vector3 horizontalVelocity;
 
     // Current upward/downward velocity.
     // Positive = rising; negative = falling.
     private float verticalVelocity;
 
-    // Remaining time during which a jump is allowed
+    // Remaining time during which jumping is allowed
     // after the player leaves the ground.
     private float coyoteTimer;
 
     // Remaining time for a buffered jump input.
     private float jumpBufferTimer = -1f;
+
+    // Prevents death from being processed multiple times.
+    private bool isDead = false;
 
 
     // =========================================================
@@ -171,6 +202,9 @@ public class PlayerMovement : MonoBehaviour
 
         if (jumpAction != null)
             jumpAction.action.Enable();
+
+        if (interactAction != null)
+            interactAction.action.Enable();
     }
 
 
@@ -184,6 +218,9 @@ public class PlayerMovement : MonoBehaviour
 
         if (jumpAction != null)
             jumpAction.action.Disable();
+
+        if (interactAction != null)
+            interactAction.action.Disable();
     }
 
 
@@ -196,9 +233,13 @@ public class PlayerMovement : MonoBehaviour
     /// 3. Update jump timing.
     /// 4. Calculate vertical velocity.
     /// 5. Apply the final movement.
+    /// 6. Check for collectible interaction.
     /// </summary>
     private void Update()
     {
+        if (isDead)
+            return;
+
         if (moveAction == null || jumpAction == null)
             return;
 
@@ -221,6 +262,9 @@ public class PlayerMovement : MonoBehaviour
         UpdateVerticalMovement(isGrounded, deltaTime);
 
         ApplyMovement(deltaTime);
+
+        if (!isDead)
+            HandleInteraction();
     }
 
 
@@ -237,6 +281,12 @@ public class PlayerMovement : MonoBehaviour
     ///
     /// Grounded and airborne movement use different
     /// acceleration and deceleration values.
+    ///
+    /// When grounded, releasing all movement keys immediately
+    /// sets horizontal velocity to zero.
+    ///
+    /// When airborne, releasing movement keys preserves
+    /// momentum according to the air deceleration setting.
     /// </summary>
     private void UpdateHorizontalMovement(
         Vector2 input,
@@ -287,12 +337,31 @@ public class PlayerMovement : MonoBehaviour
                 : airDeceleration;
         }
 
-        // Gradually approach the desired horizontal velocity.
-        horizontalVelocity = Vector3.MoveTowards(
-            horizontalVelocity,
-            targetVelocity,
-            movementRate * deltaTime
-        );
+        // =====================================================
+        // INSTANT GROUND STOPPING
+        // =====================================================
+
+        // Stop immediately when no movement input is held
+        // and the CharacterController is grounded.
+        //
+        // This removes ground sliding and makes landing
+        // on small platforms easier to control.
+        //
+        // Airborne movement remains unaffected.
+        if (isGrounded && !hasMovementInput)
+        {
+            horizontalVelocity = Vector3.zero;
+        }
+        else
+        {
+            // Gradually approach the desired velocity
+            // using the appropriate acceleration rate.
+            horizontalVelocity = Vector3.MoveTowards(
+                horizontalVelocity,
+                targetVelocity,
+                movementRate * deltaTime
+            );
+        }
     }
 
 
@@ -363,6 +432,13 @@ public class PlayerMovement : MonoBehaviour
         // Attempt to execute a jump.
         TryJump();
 
+        // Cut the jump short when the player releases Space.
+        if (jumpAction.action.WasReleasedThisFrame()
+            && verticalVelocity > 0f)
+        {
+            verticalVelocity *= jumpCutMultiplier;
+        }
+
         // Determine the gravity for the current situation.
         float currentGravity = gravity;
 
@@ -417,6 +493,161 @@ public class PlayerMovement : MonoBehaviour
         // This prevents the same input from triggering again.
         jumpBufferTimer = -1f;
         coyoteTimer = -1f;
+    }
+
+
+    // =========================================================
+    // COLLECTIBLE INTERACTION
+    // =========================================================
+
+    /// <summary>
+    /// Checks whether the player has pressed Interact.
+    ///
+    /// If so, casts a ray forward from the player's camera.
+    /// If the ray hits an object tagged "Collectible", the
+    /// object is collected.
+    ///
+    /// Child colliders are supported by checking their parents.
+    /// Trigger colliders are also supported.
+    /// </summary>
+    private void HandleInteraction()
+    {
+        // Interaction is optional. Missing assignments should
+        // not interfere with movement or jumping.
+        if (interactAction == null || playerCamera == null)
+            return;
+
+        // Only interact when the button is first pressed.
+        if (!interactAction.action.WasPressedThisFrame())
+            return;
+
+        // Create a ray originating from the camera
+        // and pointing in the direction the player looks.
+        Ray ray = new Ray(
+            playerCamera.transform.position,
+            playerCamera.transform.forward
+        );
+
+        // Check for an object within interaction range.
+        if (!Physics.Raycast(
+                ray,
+                out RaycastHit hit,
+                interactionRange,
+                Physics.DefaultRaycastLayers,
+                QueryTriggerInteraction.Collide))
+        {
+            return;
+        }
+
+        // Search the hit object and its parents.
+        // This supports collectibles with child colliders.
+        Transform current = hit.collider.transform;
+
+        while (current != null)
+        {
+            if (current.CompareTag("Collectible"))
+            {
+                CollectItem(current.gameObject);
+                return;
+            }
+
+            current = current.parent;
+        }
+    }
+
+
+    /// <summary>
+    /// Processes a collected object.
+    ///
+    /// Currently:
+    /// 1. Logs the collected object's name.
+    /// 2. Removes the object from the scene.
+    ///
+    /// Inventory functionality can be added here later.
+    /// </summary>
+    private void CollectItem(GameObject item)
+    {
+        Debug.Log($"Collected: {item.name}");
+
+        Destroy(item);
+    }
+
+
+    // =========================================================
+    // PLAYER DEATH
+    // =========================================================
+
+    /// <summary>
+    /// Detects collisions between the CharacterController
+    /// and non-trigger colliders.
+    ///
+    /// If the contacted object is a DeathZone, the player dies.
+    /// </summary>
+    private void OnControllerColliderHit(ControllerColliderHit hit)
+    {
+        CheckForDeath(hit.collider);
+    }
+
+
+    /// <summary>
+    /// Detects when the player enters a trigger collider.
+    ///
+    /// Allows DeathZones to be non-solid while still
+    /// killing the player on contact.
+    /// </summary>
+    private void OnTriggerEnter(Collider other)
+    {
+        CheckForDeath(other);
+    }
+
+
+    /// <summary>
+    /// Checks whether the contacted object or one of its
+    /// parents has the "DeathZone" tag.
+    ///
+    /// This supports hazards whose colliders are located
+    /// on child GameObjects.
+    /// </summary>
+    private void CheckForDeath(Collider other)
+    {
+        // Ignore additional collisions after death.
+        if (isDead)
+            return;
+
+        Transform current = other.transform;
+
+        while (current != null)
+        {
+            if (current.CompareTag("DeathZone"))
+            {
+                Die();
+                return;
+            }
+
+            current = current.parent;
+        }
+    }
+
+
+    /// <summary>
+    /// Kills the player and restarts the current level.
+    ///
+    /// The isDead flag prevents multiple death events
+    /// from attempting to reload the scene simultaneously.
+    /// </summary>
+    private void Die()
+    {
+        if (isDead)
+            return;
+
+        isDead = true;
+
+        Debug.Log("Player died!");
+
+        // Reload the currently active scene.
+        SceneManager.LoadScene(
+            SceneManager.GetActiveScene().name
+        );
     }
 
 
