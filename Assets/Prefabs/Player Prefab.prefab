@@ -67,7 +67,7 @@ Camera:
     height: 1
   near clip plane: 0.3
   far clip plane: 1000
-  field of view: 60
+  field of view: 100
   orthographic: 0
   orthographic size: 5
   m_Depth: -1
@@ -310,6 +310,10 @@ MonoBehaviour:
   jumpReleaseMultiplier: 2
   maxFallSpeed: 50
   groundStickSpeed: 5
+  rideMovingPlatforms: 1
+  inheritPlatformMomentum: 1
+  platformMomentumMultiplier: 1
+  maxGroundAngle: 60
   moveAction: {fileID: 7906132048140922166, guid: 8debb1b6bdb816e4e9052c909a7878a6, type: 3}
   jumpAction: {fileID: -7406461825523710430, guid: 8debb1b6bdb816e4e9052c909a7878a6, type: 3}
   interactAction: {fileID: -3343165378076930431, guid: 8debb1b6bdb816e4e9052c909a7878a6, type: 3}
