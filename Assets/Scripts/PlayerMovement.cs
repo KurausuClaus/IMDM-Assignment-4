@@ -641,13 +641,22 @@ public class PlayerMovement : MonoBehaviour
     // COLLISION DETECTION
     // =====================================================
 
-    private void OnControllerColliderHit(
-        ControllerColliderHit hit)
+
+    private void OnControllerColliderHit(ControllerColliderHit hit)
     {
+        // =====================================================
+        // DEATH ZONE DETECTION
+        // =====================================================
+
         CheckForDeath(hit.collider);
 
         if (isDead)
             return;
+
+
+        // =====================================================
+        // GROUND DETECTION
+        // =====================================================
 
         float normalY = hit.normal.y;
 
@@ -660,7 +669,51 @@ public class PlayerMovement : MonoBehaviour
 
             groundHitThisFrame = hit.collider;
         }
+
+
+        // =====================================================
+        // WALL COLLISION
+        // =====================================================
+
+        // Only process approximately vertical walls.
+        if (Mathf.Abs(normalY) < 0.5f)
+        {
+            // Horizontal normal pointing away from the wall.
+            Vector3 wallNormal = new Vector3(
+                hit.normal.x,
+                0f,
+                hit.normal.z
+            ).normalized;
+
+            // Cancel inherited momentum directed into the wall.
+            float inheritedIntoWall =
+                Vector3.Dot(
+                    inheritedHorizontalVelocity,
+                    wallNormal
+                );
+
+            if (inheritedIntoWall < 0f)
+            {
+                inheritedHorizontalVelocity -=
+                    wallNormal * inheritedIntoWall;
+            }
+
+            // Cancel ordinary movement velocity directed
+            // into the wall as well.
+            float movementIntoWall =
+                Vector3.Dot(
+                    horizontalVelocity,
+                    wallNormal
+                );
+
+            if (movementIntoWall < 0f)
+            {
+                horizontalVelocity -=
+                    wallNormal * movementIntoWall;
+            }
+        }
     }
+
 
 
     // =====================================================
