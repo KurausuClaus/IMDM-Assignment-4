@@ -1,9 +1,13 @@
-# IMDM Assignment 4
-Assignment 4 for IMDM101.
+# IMDM Final Project
+Final Project for IMDM101.
+
 Simple prototype for a 3d platformer. Basic concept emphasizes movement and aim at the same time, akin to that of scout from tf2.
 Currently features 3 levels, and a celebration.
-Movement is highly responsive and features no air deceleration. When you have momentum, you keep it, and thus stopping your own momentum is encouraged!
-About a dozen scripts or so were conceived for this project.
+Movement is highly responsive and features no air deceleration. When you have momentum, you keep it, and thus stopping your own momentum is encouraged! Current plans include 9 total levels, with 3-4 featuring unique gimmicks. Possible that a music level is included (but we'll see!). Grappling hook implementation details are under discussion.
+The main focus of my game is to stress movement and aim. Our first levels are rather typical of any other 3d platformer, but ramp up and force elegant aim as you progress. Strongly recommended to have prior FPS experience.
+
+Check back for commits over the coming weeks.
+
 
 <img width="1601" height="816" alt="image" src="https://github.com/user-attachments/assets/005cc059-32d6-4d7c-b98c-8e6a40526766" />
 Victory Spheres.
